@@ -1,0 +1,8 @@
+{
+  "paper_url": "https://proceedings.mlr.press/v202/ni23a/ni23a.pdf",
+  "paper_sha256": "32f1985432f2bd686b6b790081ef6321818808fd2c1dc7717d885c82ee2e8b91",
+  "corro_commit": "210ad407a0a7807b7789ab426d8b5be6c72268a7",
+  "diffuser_commit": "7ea422860cc0106e5ca5949d980f04b799d5462c",
+  "focal_commit": "9aff52c03de50b7f1189d51add0723fa81e42e6f",
+  "prompt_dt_commit": "5f665e50f6218a4df97c3f12e3e556c08bac9041"
+}
