@@ -8,4 +8,5 @@ datasets/
 runs/
 third_party/
 tmp/
-
+*.sh
+logs/

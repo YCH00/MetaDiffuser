@@ -4,19 +4,212 @@
 
 本目录按照 ICML 2023 正式版和用户提供的实施文档构建。当前为可审计的独立实现；论文存在符号和维度矛盾，原始数据、全部结构细节及实验预算并未公开。**代码可运行/测试通过不代表六环境论文成绩已复现。** 详见 [逐项核对记录](docs/PAPER_AUDIT.md)。
 
-## 安装
-
-Python 3.10+，建议单独venv。Windows将下列python替换为`.venv\Scripts\python`；Linux可使用`.venv/bin/python`。
+## 环境配置
 
 ```bash
-python -m venv .venv
+conda create -n metadiffuser python=3.10 pip -y
+conda activate metadiffuser
+
+python -m pip install \
+  'pip<24.1' \
+  'setuptools>=68,<70' \
+  'wheel<0.40' \
+  numpy==1.23.5 \
+  Cython==0.29.37
+
 python -m pip install torch==2.6.0 --index-url https://download.pytorch.org/whl/cu126
-python -m pip install -e ".[test]"
-python -m metadiffuser.cli doctor
-python -m pytest -q
+
+python -m pip install \
+  gym==0.17.3 \
+  scipy==1.10.1 \
+  matplotlib==3.7.5 \
+  six==1.17.0 \
+  glfw==2.6.5 \
+  imageio==2.31.6 \
+  fasteners==0.19 \
+  cffi==1.16.0 \
+  pycparser==2.22 \
+  cloudpickle==1.6.0 \
+  requests==2.32.3 \
+  PyOpenGL==3.1.7
+
+sudo apt-get update
+sudo apt-get install -y build-essential libosmesa6-dev libgl1-mesa-dev libglu1-mesa-dev patchelf
+
+use_mujoco 131 200
+python -m pip install --no-build-isolation  mujoco-py==2.0.2.13
+
+cd MetaDiffuser
+python -m pip install -e '.[test]'
+python scripts/fetch_references.py
+
+
 ```
 
+cp -r ./pkg/.mujoco ~/
+vim ~/.bashrc
+source ~/.bashrc
+
+use_mujoco() {
+    local version
+    local mjpro_path=""
+    local mujoco_path=""
+    local clean_path=""
+    local path_item
+    local -a path_items
+
+    # 检查参数数量
+    if [ "$#" -eq 0 ] || [ "$#" -gt 2 ]; then
+        echo "用法: use_mujoco 131|150|200 [200]"
+        return 1
+    fi
+
+    # 解析版本参数
+    for version in "$@"; do
+        case "$version" in
+            131)
+                if [ -n "$mjpro_path" ]; then
+                    echo "错误: 131 和 150 不能同时启用"
+                    return 1
+                fi
+                mjpro_path="$HOME/.mujoco/mjpro131"
+                ;;
+            150)
+                if [ -n "$mjpro_path" ]; then
+                    echo "错误: 131 和 150 不能同时启用"
+                    return 1
+                fi
+                mjpro_path="$HOME/.mujoco/mjpro150"
+                ;;
+            200)
+                if [ -n "$mujoco_path" ]; then
+                    echo "错误: 200 不能重复指定"
+                    return 1
+                fi
+                mujoco_path="$HOME/.mujoco/mujoco200"
+                ;;
+            *)
+                echo "错误: 不支持 MuJoCo $version"
+                echo "用法: use_mujoco 131|150|200 [200]"
+                return 1
+                ;;
+        esac
+    done
+
+    # 检查安装目录
+    if [ -n "$mjpro_path" ] && [ ! -d "$mjpro_path/bin" ]; then
+        echo "错误: 目录不存在 $mjpro_path/bin"
+        return 1
+    fi
+
+    if [ -n "$mujoco_path" ] && [ ! -d "$mujoco_path/bin" ]; then
+        echo "错误: 目录不存在 $mujoco_path/bin"
+        return 1
+    fi
+
+    # 清理旧 MuJoCo 动态库路径
+    IFS=':' read -r -a path_items <<< "${LD_LIBRARY_PATH:-}"
+
+    for path_item in "${path_items[@]}"; do
+        case "$path_item" in
+            "$HOME/.mujoco/mjpro131/bin"|\
+            "$HOME/.mujoco/mjpro150/bin"|\
+            "$HOME/.mujoco/mujoco200/bin"|\
+            "$HOME/.mujoco/mjpro/bin"|"")
+                ;;
+            *)
+                clean_path="${clean_path:+$clean_path:}$path_item"
+                ;;
+        esac
+    done
+
+    # 清理旧环境变量
+    unset MUJOCO_PY_MJPRO_PATH
+    unset MUJOCO_PY_MUJOCO_PATH
+
+    # 设置新环境变量
+    local new_path=""
+
+    if [ -n "$mujoco_path" ]; then
+        export MUJOCO_PY_MUJOCO_PATH="$mujoco_path"
+        new_path="$mujoco_path/bin"
+    fi
+
+    if [ -n "$mjpro_path" ]; then
+        export MUJOCO_PY_MJPRO_PATH="$mjpro_path"
+        new_path="${new_path:+$new_path:}$mjpro_path/bin"
+    fi
+
+    export MUJOCO_PY_MJKEY_PATH="$HOME/.mujoco/mjkey.txt"
+    export MUJOCO_PY_FORCE_CPU=1
+
+    export LD_LIBRARY_PATH="$new_path${clean_path:+:$clean_path}"
+
+    echo "MuJoCo 环境切换成功"
+    echo "MUJOCO_PY_MJPRO_PATH=${MUJOCO_PY_MJPRO_PATH:-<未设置>}"
+    echo "MUJOCO_PY_MUJOCO_PATH=${MUJOCO_PY_MUJOCO_PATH:-<未设置>}"
+    echo "LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
+}
+
 先激活venv再运行上述pip，避免装到系统Python。旧MuJoCo单独配置，见 [环境说明](docs/ENVIRONMENTS.md)。
+
+## 数据收集
+训练专家策略
+```bash
+(
+  set -e
+
+  for spec in \
+    point_robot:1000 \
+    ant_dir:200 \
+    cheetah_dir:500 \
+    cheetah_vel:500 \
+    walker_param:3000 \
+    hopper_param:700
+  do
+    env_name="${spec%%:*}"
+    iterations="${spec##*:}"
+
+    python scripts/train_expert_cohort.py \
+      --config "configs/${env_name}.json" \
+      --tasks "datasets/${env_name}_tasks.json" \
+      --output "runs/${env_name}_experts" \
+      --iterations "$iterations" \
+      --workers 2
+  done
+)
+```
+检查各任务 evaluation.jsonl 中的回报是否已达到合理水平（主要看能不能达到论文中报告的oracle）
+```bash
+for ENV in ant_dir point_robot cheetah_dir cheetah_vel hopper_param walker_param; do
+    echo "$ENV start:"
+    for f in ./runs/"$ENV"_experts/"$ENV"_*/evaluation.jsonl; do
+        echo -n "$(basename "$(dirname "$f")"): "
+        jq -s -r 'max_by(.mean) | "mean=\(.mean), iteration=\(.iteration)"' "$f"
+    done
+    echo "$ENV done."
+done
+```
+确认策略质量后，采集数据
+```bash
+(
+  set -e
+
+  for env_name in \
+    point_robot ant_dir cheetah_dir cheetah_vel walker_param hopper_param
+  do
+    python -m metadiffuser.cli --device cpu collect \
+      --config "configs/${env_name}.json" \
+      --tasks "datasets/${env_name}_tasks.json" \
+      --policy-root "runs/${env_name}_experts" \
+      --output "datasets/${env_name}_sac"
+
+    python scripts/audit_dataset.py \
+      --dataset "datasets/${env_name}_sac" \
+      --output "runs/${env_name}_data_audit.json"
+  done
+)
+```
 
 ## 快速验证
 
@@ -71,3 +264,4 @@ CVAE-Planner、Prompt-DT及其他基线的入口和已知适配差异见[基线�
 - `third_party/`：固定commit的CORRO与Diffuser参考代码。
 
 研究来源：[MetaDiffuser正式论文](https://proceedings.mlr.press/v202/ni23a.html)、[CORRO](https://github.com/PKU-RL/CORRO)、[Diffuser](https://github.com/jannerm/diffuser)。
+
